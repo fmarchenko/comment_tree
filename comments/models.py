@@ -132,6 +132,8 @@ class AsyncCommentsDump(models.Model):
 def comment_model_delete(sender, **kwargs):
     instance = kwargs['instance']
     instance.delete_links()
+    Comment.objects.filter(parents__parent=instance).delete()
+    CommentClosure.objects.filter(parent=instance).delete()
 
 
 @receiver(post_save, sender=Comment)
