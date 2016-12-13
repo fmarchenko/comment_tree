@@ -96,7 +96,7 @@ class CommentsMethodsTests(TestCase):
 
         # Change comment
         data['body'] *= 2
-        response = self.client.post(
+        response = self.client.put(
             self.comments['1l_photo'].get_absolute_url(),
             data=json.dumps(data), content_type='application/json'
         )

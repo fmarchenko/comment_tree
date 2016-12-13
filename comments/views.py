@@ -113,7 +113,7 @@ class CommentDetailView(JSONResponseMixin, DetailView):
             ctx = self.object.to_dict(full_tree)
         return ctx
 
-    def post(self, request, *args, **kwargs):
+    def put(self, request, *args, **kwargs):
         self.object = self.get_object()
         try:
             if self.request.content_type == 'application/json':
