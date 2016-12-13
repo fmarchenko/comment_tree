@@ -205,7 +205,7 @@ class CommentsDumpView(JSONResponseMixin, TemplateView):
         })
 
     def post(self, request, *args, **kwargs):
-        form = DumpForm(request.GET)
+        form = DumpForm(request.POST)
         if not form.is_valid():
             return self.render_to_json_response(dict(form.errors), status=406)
         cd = form.cleaned_data

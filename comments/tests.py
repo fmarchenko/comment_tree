@@ -170,9 +170,10 @@ class CommentsMethodsTests(TestCase):
 
     def test_async_user_history(self):
         # Dump user comments history
-        response = self.client.post('{}?user={}'.format(
-            reverse('comments_dump'), self.test_user.pk
-        ))
+        response = self.client.post(
+            reverse('comments_dump'),
+            data={'user': self.test_user.pk}
+        )
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.content)
 
