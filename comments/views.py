@@ -67,7 +67,7 @@ class CommentListView(JSONResponseMixin, ListView):
             cd = form.cleaned_data
             limit = cd.pop('limit') or 10
             offset = cd.pop('offset') or 0
-            full_tree = cd.pop('full_tree')
+            full_tree = cd.pop('full_tree', False)
             queryset = kwargs.pop('object_list', self.object_list).filter(
                 **{k: v for k, v in cd.items() if v}
             )

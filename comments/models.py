@@ -2,11 +2,9 @@ from __future__ import unicode_literals
 
 import json
 
-from django.db import models
+from django.db import models, transaction
 from django.forms.models import model_to_dict
 from django.core.urlresolvers import reverse
-from django.db.models.signals import pre_delete, post_save
-from django.dispatch import receiver
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
@@ -32,7 +30,10 @@ class Photo(AbstractTestEntity):
 
 class Comment(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, blank=True, null=True)
-    parent = models.ForeignKey('self', related_name='children', blank=True, null=True)
+    parent = models.ForeignKey(
+        'self', related_name='children',
+        blank=True, null=True
+    )
     owner_type = models.ForeignKey(ContentType, blank=True, null=True)
     owner_id = models.PositiveIntegerField(blank=True, null=True)
     owner = GenericForeignKey('owner_type', 'owner_id')
@@ -46,7 +47,9 @@ class Comment(models.Model):
         ordering = ['create_at']
 
     def delete_links(self):
-        CommentClosure.objects.filter(models.Q(child=self) | models.Q(child__parent=self)).delete()
+        CommentClosure.objects.filter(
+            child=self, parent=self.parent
+        ).delete()
 
     def create_links(self):
         parents = CommentClosure.objects.filter(child=self.parent)\
@@ -54,15 +57,17 @@ class Comment(models.Model):
         childrens = CommentClosure.objects.filter(parent=self)\
             .values('child', 'depth')
         newlinks = [
-            CommentClosure(parent_id=p['parent'], child_id=c['child'], depth=p['depth']+c['depth']+1)
-            for p in parents for c in childrens]\
-            + [
-                CommentClosure(parent=self, child=x) for x in self.children.all()
-            ]
+            CommentClosure(
+                parent_id=p['parent'], child_id=c['child'],
+                depth=p['depth']+c['depth']+1
+            )
+            for p in parents for c in childrens]
         CommentClosure.objects.bulk_create(newlinks)
 
     def __unicode__(self):
-        return '#{} for owner {} and parent {}'.format(self.pk, self.owner, self.parent_id)
+        return '#{} for owner {} and parent {}'.format(
+            self.pk, self.owner, self.parent_id
+        )
 
     def get_absolute_url(self):
         return reverse('comment_detail', kwargs={'pk': self.pk})
@@ -77,25 +82,60 @@ class Comment(models.Model):
             'update_at': self.update_at.isoformat()
         })
         if with_childs:
-            dict_obj['childs'] = map(lambda x: x.child.to_dict(), self.childrens.filter(child__parent=self))
+            dict_obj['childs'] = map(
+                lambda x: x.child.to_dict(),
+                self.childrens.filter(child__parent=self)
+            )
         return dict_obj
 
     def save(self, force_insert=False, force_update=False, using=None,
              update_fields=None):
-        if self.pk is not None:
+        create = self.pk is None
+        if create:
+            super(Comment, self).save(force_insert, force_update, using,
+                                      update_fields)
+            closure_instance = CommentClosure(
+                parent=self,
+                child=self,
+                depth=0
+            )
+            closure_instance.save()
+            self.create_links()
+
+            # Send notifications
+            from .utils import NotifyTask
+            task = NotifyTask(self)
+            task.run()
+        else:
             orig = Comment.objects.get(pk=self.pk)
             history = HistoryComment(
                 json_state=json.dumps(orig.to_dict()),
                 comment=orig
-            ).save()
-        super(Comment, self).save(force_insert, force_update, using,
-                                  update_fields)
+            )
+            history.save()
+            if orig.parent_id != self.parent_id:
+                orig.delete_links()
+                self.create_links()
+            super(Comment, self).save(force_insert, force_update, using,
+                                      update_fields)
+
+    def delete(self, using=None, keep_parents=False):
+        with transaction.atomic():
+            childs = Comment.objects.filter(parents__parent=self)
+            closures = CommentClosure.objects.filter(parent=self)
+            closures.delete()
+            map(lambda x: x.delete(), childs)
+            super(Comment, self).delete(using, keep_parents)
+
 
 
 class CommentClosure(models.Model):
     parent = models.ForeignKey(Comment, related_name='childrens')
     child = models.ForeignKey(Comment, related_name='parents')
     depth = models.IntegerField(default=0)
+
+    def __unicode__(self):
+        return 'Parent #{}, child #{}'.format(self.parent_id, self.child_id)
 
 
 class HistoryComment(models.Model):
@@ -126,29 +166,3 @@ class AsyncCommentsDump(models.Model):
         )
         dict_obj['path'] = self.path.url
         return dict_obj
-
-
-@receiver(pre_delete, sender=Comment)
-def comment_model_delete(sender, **kwargs):
-    instance = kwargs['instance']
-    instance.delete_links()
-    Comment.objects.filter(parents__parent=instance).delete()
-    CommentClosure.objects.filter(parent=instance).delete()
-
-
-@receiver(post_save, sender=Comment)
-def comment_model_save(sender, **kwargs):
-    instance = kwargs['instance']
-    created = kwargs['created']
-    instance.delete_links()
-    closure_instance = CommentClosure(
-        parent=instance,
-        child=instance,
-        depth=0
-    ).save()
-    instance.create_links()
-
-    if created:
-        from .utils import NotifyTask
-        task = NotifyTask(instance)
-        task.run()
